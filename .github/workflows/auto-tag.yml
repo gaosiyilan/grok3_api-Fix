@@ -1,0 +1,73 @@
+name: Auto Generate Tag
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  auto-tag:
+    name: Generate Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: get_latest_tag
+        run: |
+          git fetch --tags
+          LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n 1)
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Generate new tag
+        id: generate_tag
+        run: |
+          # 如果没有找到标签，则创建初始标签 v0.1.0
+          if [ -z "${{ env.LATEST_TAG }}" ]; then
+            NEW_TAG="v0.1.0"
+          else
+            # 从最新标签中提取版本号
+            VERSION=${LATEST_TAG#v}
+            MAJOR=$(echo $VERSION | cut -d. -f1)
+            MINOR=$(echo $VERSION | cut -d. -f2)
+            PATCH=$(echo $VERSION | cut -d. -f3)
+            
+            # 增加补丁版本号
+            PATCH=$((PATCH + 1))
+            
+            NEW_TAG="v$MAJOR.$MINOR.$PATCH"
+          fi
+          
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+          
+      - name: Create tag
+        if: steps.get_latest_tag.outputs.latest_tag != steps.generate_tag.outputs.new_tag
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -a ${{ env.NEW_TAG }} -m "Release ${{ env.NEW_TAG }}"
+          git push origin ${{ env.NEW_TAG }}
+          echo "Created and pushed new tag: ${{ env.NEW_TAG }}"
+          
+      - name: Trigger release workflow
+        if: steps.get_latest_tag.outputs.latest_tag != steps.generate_tag.outputs.new_tag
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'release.yml',
+              ref: 'main'
+            });
+            console.log('Successfully triggered release workflow')

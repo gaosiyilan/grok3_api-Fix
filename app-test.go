@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -19,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/andybalholm/brotli"
 	"github.com/google/uuid"
 )
 
@@ -38,19 +40,21 @@ func NewGrokClient(cookie string, isReasoning, enableSearch, uploadMessage, keep
 	return &GrokClient{
 		headers: map[string]string{
 			"accept":             "*/*",
-			"accept-language":    "en-GB,en;q=0.9",
+			"accept-encoding":    "gzip, deflate, br, zstd",
+			"accept-language":    "en-US;q=0.9,en;q=0.8",
 			"content-type":       "application/json",
+			"host":               "grok.com",
 			"origin":             "https://grok.com",
+			"dnt":                "1",
 			"priority":           "u=1, i",
 			"referer":            "https://grok.com/",
-			"sec-ch-ua":          `"Not/A)Brand";v="8", "Chromium";v="126", "Brave";v="126"`,
+			"sec-ch-ua":          `"Not:A-Brand";v="24", "Chromium";v="134"`,
 			"sec-ch-ua-mobile":   "?0",
-			"sec-ch-ua-platform": `"macOS"`,
+			"sec-ch-ua-platform": `"Linux"`,
 			"sec-fetch-dest":     "empty",
 			"sec-fetch-mode":     "cors",
 			"sec-fetch-site":     "same-origin",
-			"sec-gpc":            "1",
-			"user-agent":         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+			"user-agent":         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
 			"cookie":             cookie,
 		},
 		isReasoning:    isReasoning,
@@ -120,7 +124,7 @@ type RequestBody struct {
 	Model    string `json:"model"`
 	Messages []struct {
 		Role    string `json:"role"`
-		Content string `json:"content"`
+		Content any    `json:"content"`
 	} `json:"messages"`
 	Stream           bool   `json:"stream"`
 	GrokCookies      any    `json:"grokCookies,omitempty"`
@@ -169,13 +173,15 @@ type UploadFileResponse struct {
 }
 
 const (
-	newChatUrl              = "https://grok.com/rest/app-chat/conversations/new"
-	uploadFileUrl           = "https://grok.com/rest/app-chat/upload-file"
-	grok3ModelName          = "grok-3"
-	grok3ReasoningModelName = "grok-3-reasoning"
-	completionsPath         = "/v1/chat/completions"
-	listModelsPath          = "/v1/models"
-	defaultBeforePromptText = "For the data below, entries with 'system' are system information, entries with 'assistant' are messages you have previously sent, entries with 'user' are messages sent by the user. You need to respond to the user's last message accordingly based on the corresponding data."
+	newChatUrl                 = "https://grok.com/rest/app-chat/conversations/new"
+	uploadFileUrl              = "https://grok.com/rest/app-chat/upload-file"
+	grok3ModelName             = "grok-3"
+	grok3ReasoningModelName    = "grok-3-reasoning"
+	completionsPath            = "/v1/chat/completions"
+	listModelsPath             = "/v1/models"
+	messageCharsLimit          = 50000
+	defaultBeforePromptText    = "For the data below, entries with '[[system]]' are system information, entries with '[[assistant]]' are messages you have previously sent, entries with '[[user]]' are messages sent by the user. You need to respond to the user's last message accordingly based on the corresponding data."
+	defaultUploadMessagePrompt = "Follow the instructions in the attached file to respond."
 )
 
 // 全局配置变量
@@ -186,6 +192,7 @@ var (
 	textAfterPrompt  *string
 	keepChat         *bool
 	ignoreThinking   *bool
+	charsLimit       *uint
 	longTxt          *bool // 控制是否启用长文本上传
 	longTxtThreshold int   // 长文本阈值（不需要指针，因为在 main 中解析后固定）
 	httpProxy        *string
@@ -204,6 +211,20 @@ var (
 		status: make(map[string]bool),
 	}
 )
+
+// decompressBody 解压响应体。
+func decompressBody(resp *http.Response) (io.ReadCloser, error) {
+	switch resp.Header.Get("content-encoding") {
+	case "br":
+		return io.NopCloser(brotli.NewReader(resp.Body)), nil
+	case "gzip":
+		return gzip.NewReader(resp.Body)
+	case "":
+		return resp.Body, nil
+	default:
+		return nil, fmt.Errorf("未知的响应编码: %s", resp.Header.Get("content-encoding"))
+	}
+}
 
 // doRequest 发送 HTTP 请求并返回响应。
 func (c *GrokClient) doRequest(method, url string, payload any) (*http.Response, error) {
@@ -227,8 +248,16 @@ func (c *GrokClient) doRequest(method, url string, payload any) (*http.Response,
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Grok API 错误: %d %s, 响应体: %s", resp.StatusCode, resp.Status, string(body))
+		respBody, err := decompressBody(resp)
+		if err != nil {
+			return nil, err
+		}
+		defer respBody.Close()
+		body, err := io.ReadAll(respBody)
+		if err != nil {
+			return nil, fmt.Errorf("Grok API 错误: %s", resp.Status)
+		}
+		return nil, fmt.Errorf("Grok API 错误: %s, 响应体: %s", resp.Status, string(body)[:min(len(body), 128)])
 	}
 	return resp, nil
 }
@@ -247,14 +276,22 @@ func (c *GrokClient) uploadMessageAsFile(message string) (*UploadFileResponse, e
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := decompressBody(resp)
+	if err != nil {
+		return nil, err
+	}
+	defer respBody.Close()
+	body, err := io.ReadAll(respBody)
 	if err != nil {
 		return nil, fmt.Errorf("上传文件错误: %d %s", resp.StatusCode, resp.Status)
 	}
 	response := &UploadFileResponse{}
 	err = json.Unmarshal(body, response)
-	if err != nil || response.FileMetadataId == "" {
-		return nil, fmt.Errorf("解析 JSON 错误或 FileMetadataId 为空: %s", string(body))
+	if err != nil {
+		return nil, fmt.Errorf("解析 JSON 错误: %s", string(body))
+	}
+	if response.FileMetadataId == "" {
+		return nil, fmt.Errorf("上传文件错误: FileMetadataId 为空")
 	}
 	return response, nil
 }
@@ -271,7 +308,7 @@ func (c *GrokClient) sendMessage(message string, stream bool) (io.ReadCloser, er
 		}
 		fileId = uploadResp.FileMetadataId
 		log.Printf("文件上传成功，文件ID: %s", fileId)
-		message = "请按照附件中的说明进行回复。"
+		message = defaultUploadMessagePrompt
 	}
 
 	payload := c.preparePayload(message, fileId)
@@ -280,11 +317,17 @@ func (c *GrokClient) sendMessage(message string, stream bool) (io.ReadCloser, er
 		return nil, err
 	}
 
-	if stream {
-		return resp.Body, nil
+	respBody, err := decompressBody(resp)
+	if err != nil {
+		resp.Body.Close()
+		return nil, err
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+
+	if stream {
+		return respBody, nil
+	}
+	defer respBody.Close()
+	body, err := io.ReadAll(respBody)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应体失败: %v", err)
 	}
@@ -472,6 +515,14 @@ func mustMarshal(v any) string {
 	return string(b)
 }
 
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // getCookieIndex 返回下一个有效的 cookie 索引
 func getCookieIndex(cookies []string, currentIndex uint) uint {
 	cookieStatus.Lock()
@@ -625,7 +676,32 @@ func handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(&messageBuilder, beforePromptText)
 	for _, msg := range body.Messages {
 		fmt.Fprintf(&messageBuilder, "\n[[%s]]\n", msg.Role)
-		messageBuilder.WriteString(msg.Content)
+		if content, ok := msg.Content.(string); ok {
+			messageBuilder.WriteString(content)
+		} else if messages, ok := msg.Content.([]any); ok && msg.Role == "user" {
+			for _, message := range messages {
+				if text, ok := message.(map[string]any); ok {
+					messageType := text["type"]
+					if ty, ok := messageType.(string); ok && ty == "text" {
+						if t, ok := text["text"].(string); ok {
+							fmt.Fprintln(&messageBuilder, t)
+						} else {
+							http.Error(w, "错误请求: 不支持的消息类型", http.StatusBadRequest)
+							return
+						}
+					} else {
+						http.Error(w, "错误请求: 不支持的消息类型", http.StatusBadRequest)
+						return
+					}
+				} else {
+					http.Error(w, "错误请求: 不支持的消息类型", http.StatusBadRequest)
+					return
+				}
+			}
+		} else {
+			http.Error(w, "错误请求: 不支持的消息类型", http.StatusBadRequest)
+			return
+		}
 	}
 	fmt.Fprintf(&messageBuilder, "\n%s", afterPromptText)
 
@@ -710,6 +786,7 @@ func main() {
 	textAfterPrompt = flag.String("textAfterPrompt", "", "提示后缀文本")
 	keepChat = flag.Bool("keepChat", false, "保留聊天会话")
 	ignoreThinking = flag.Bool("ignoreThinking", false, "忽略思考内容")
+	charsLimit = flag.Uint("charsLimit", messageCharsLimit, "如果消息字符数超过此限制，则将消息上传为文件")
 	longTxt = flag.Bool("longtxt", false, "启用长文本处理，后面可接阈值（如 -longtxt 60000），默认 40000")
 	httpProxy = flag.String("httpProxy", "", "HTTP/SOCKS5 代理")
 	httpProxyLower := flag.String("httpproxy", "", "HTTP/SOCKS5 代理 (小写别名)")

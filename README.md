@@ -44,7 +44,7 @@ You can configure the client using command-line flags or environment variables.
 - `-cookie`: Grok cookie(s) for authentication. Accepts a single cookie or a JSON array of cookies.
 - `-cookiesDir`: Custom directory path for cookie files (default: "cookies").
 - `-longtxt`: Enable long text processing with optional threshold (e.g., `-longtxt 60000`, default: 40000).
-- `-httpProxy`: Specifies an HTTP or SOCKS5 proxy URL (e.g., `http://127.0.0.1:1080`).
+- `-httpProxy` 或 `-httpproxy`: 指定HTTP或SOCKS5代理URL（例如，`http://127.0.0.1:1080`）。
 - `-port`: Sets the server port (default: 8180).
 
 ### Request Body Parameters

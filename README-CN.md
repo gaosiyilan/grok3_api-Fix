@@ -44,7 +44,7 @@
 - `-cookie`：用于认证的Grok cookie。接受单个cookie或JSON数组格式的多个cookie。
 - `-cookiesDir`：自定义cookie文件目录路径（默认："cookies"）。
 - `-longtxt`：启用长文本处理，可选阈值（例如，`-longtxt 60000`，默认：40000）。
-- `-httpProxy`：指定HTTP或SOCKS5代理URL（例如，`http://127.0.0.1:1080`）。
+- `-httpProxy` 或 `-httpproxy`：指定HTTP或SOCKS5代理URL（例如，`http://127.0.0.1:1080`）。
 - `-port`：设置服务器端口（默认：8180）。
 
 ### 请求体参数

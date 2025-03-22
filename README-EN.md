@@ -30,7 +30,7 @@ You can configure the client using command-line flags or environment variables.
 - `-textAfterPrompt`: Text to add after the user’s message (default: empty string).
 - `-keepChat`: Retains chat conversations after each request if set.
 - `-ignoreThinking`: Excludes thinking tokens from responses when using the reasoning model.
-- `-httpProxy`: Specifies an HTTP or SOCKS5 proxy URL. The proxy URL should be something like `http://127.0.0.1:1080` or `socks5://127.0.0.1:1080`.
+- `-httpProxy` or `-httpproxy`: Specifies an HTTP or SOCKS5 proxy URL. The proxy URL should be something like `http://127.0.0.1:1080` or `socks5://127.0.0.1:1080`.
 - `-port`: Sets the server port (default: 8180).
 - `-help`: Prints the help message.
 - `-cookiesDir`: -cookiesDir /path/to/cookies

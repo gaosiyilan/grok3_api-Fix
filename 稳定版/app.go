@@ -648,9 +648,15 @@ func main() {
 	keepChat = flag.Bool("keepChat", false, "Retain the chat conversation")
 	ignoreThinking = flag.Bool("ignoreThinking", false, "Ignore thinking content")
 	httpProxy = flag.String("httpProxy", "", "HTTP/SOCKS5 proxy")
+	httpProxyLower := flag.String("httpproxy", "", "HTTP/SOCKS5 proxy (lowercase alias)")
 	longTxt = flag.Bool("longtxt", false, "Enable uploading long conversations as text file")
 	port := flag.Uint("port", 8180, "Server port")
 	flag.Parse()
+
+	// If lowercase form of proxy parameter is used, assign its value to the uppercase form
+	if *httpProxyLower != "" {
+		*httpProxy = *httpProxyLower
+	}
 
 	if *port > 65535 {
 		log.Fatalf("Server port %d is greater than 65535", *port)

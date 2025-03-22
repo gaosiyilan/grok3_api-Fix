@@ -655,8 +655,14 @@ func main() {
 	ignoreThinking = flag.Bool("ignoreThinking", false, "忽略思考内容")
 	longTxt = flag.Bool("longtxt", false, "启用长文本处理（仅标志，未在 sendMessage 中实现）")
 	httpProxy = flag.String("httpProxy", "", "HTTP/SOCKS5 代理")
+	httpProxyLower := flag.String("httpproxy", "", "HTTP/SOCKS5 代理 (小写别名)")
 	port = flag.Uint("port", 8180, "服务器端口")
 	flag.Parse()
+
+	// 如果使用了小写形式的代理参数，则将其值赋给大写形式的参数
+	if *httpProxyLower != "" {
+		*httpProxy = *httpProxyLower
+	}
 
 	if *port > 65535 {
 		log.Fatalf("服务器端口 %d 超过 65535", *port)
